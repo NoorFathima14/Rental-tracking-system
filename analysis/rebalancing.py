@@ -1,66 +1,71 @@
 """
 rebalancing.py
-Rebalancing recommendations — the final layer.
-Depends on rhythm_engine.py, forecast.py, and overdue_alerts.py
-(all must be in the same analysis/ folder).
+Rebalancing recommendations — connects idle equipment (Part 1) to forecasted
+demand (Part 3) to recommend proactive repositioning before a customer asks.
+Depends on rhythm_engine.py, forecast.py, and overdue_alerts.py.
 """
 
 from datetime import date, timedelta
 import pandas as pd
 from rhythm_engine import load_data, build_rhythm_profile
 from forecast import forecast_demand
-from overdue_alerts import compute_risk_score, latest_booking_per_equipment
+from overdue_alerts import compute_risk_score, latest_booking_per_equipment, compute_due_date, flag_data_anomalies
 
-# ASSUMPTION: transit time between sites isn't in the dataset, so this is a
-# flat placeholder. Swap for a real Site-to-Site distance/time lookup if
-# your team has one — this is the one number in the whole module that's
-# not derived directly from your columns.
 TRANSIT_TIME_DAYS = 3
 BUFFER_DAYS = 2
-HIGH_IDLE_THRESHOLD = 0.6  # idle_ratio above this = "high idle" at a site
+HIGH_IDLE_THRESHOLD = 0.6
 
 
 def is_currently_committed(df, as_of):
-    """is_currently_committed = simulated_today between Check-In and Check-Out."""
+    """True if as_of falls between Check-In and Check-Out — i.e. someone is
+    actively paying for this machine right now."""
     as_of_ts = pd.Timestamp(as_of)
     return (df["Check-In Date"] <= as_of_ts) & (as_of_ts <= df["Check-Out Date"])
 
 
-def eligibility_report(df, as_of):
+def eligibility_report(df, as_of=None):
     """
     Tags every piece of equipment as:
-      - eligible_for_rebalancing (idle, not currently committed)
-      - underutilized_but_committed (idle, but mid-rental — billing insight, no move)
-      - top_priority (idle + overdue + unassigned)
+      - eligible_for_rebalancing: idle AND not currently committed → free to move
+      - underutilized_but_committed: idle BUT mid-rental → billing insight only, no move
+      - top_priority: idle + overdue + unassigned → most urgent
 
-    Risk scores are computed on the FULL dataset (so type averages stay
-    accurate), then collapsed to one row per Equipment ID (latest STARTED
-    booking as of as_of, via the shared function in overdue_alerts.py) before
-    tagging — so each physical machine only shows up once, based on its true
-    current status.
+    Anomaly rows (no operator/no site) are excluded from all three buckets
+    since we can't safely act on their location/ownership data.
     """
-    scored = compute_risk_score(df)  # full history, accurate type averages
-    latest = latest_booking_per_equipment(scored, as_of)  # one row per machine, status-accurate
+    if as_of is None:
+        as_of = date.today()
+    as_of_ts = pd.Timestamp(as_of)
+
+    flagged = flag_data_anomalies(df)
+    clean = flagged[~flagged["is_data_anomaly"]].copy()
+
+    scored = compute_risk_score(clean, as_of)
+    latest = latest_booking_per_equipment(scored, as_of)
+    latest = compute_due_date(latest)
 
     latest["is_committed"] = is_currently_committed(latest, as_of)
     latest["eligible_for_rebalancing"] = (~latest["is_committed"]) & (latest["idle_ratio"] > HIGH_IDLE_THRESHOLD)
     latest["underutilized_but_committed"] = latest["is_committed"] & (latest["idle_ratio"] > HIGH_IDLE_THRESHOLD)
 
-    as_of_ts = pd.Timestamp(as_of)
-    is_overdue = (latest["Check-Out Date"] < as_of_ts) & (~latest["is_committed"])
+    is_overdue = (latest["due_date"] < as_of_ts) & (~latest["is_committed"])
     is_unassigned = latest["Last Operator ID"].isna()
     latest["top_priority"] = latest["idle_ratio"].gt(HIGH_IDLE_THRESHOLD) & is_overdue & is_unassigned
 
     return latest
 
 
-def recommend_moves(df, as_of):
+def recommend_moves(df, as_of=None):
     """
-    For each eligible idle piece of equipment (latest STARTED booking only)
-    at Site A, checks if the same Type is trending/spiking at another Site B,
-    and whether transit + buffer still beats the forecasted need date.
+    For each genuinely-free idle machine at Site A: check if the same Type
+    is trending/spiking at another Site B, and whether transit + buffer time
+    still lands before that site's forecasted need date. If so, recommend
+    the move — proactively, before any customer request comes in.
     """
-    tagged = eligibility_report(df, as_of)   # already deduped to latest-per-equipment
+    if as_of is None:
+        as_of = date.today()
+
+    tagged = eligibility_report(df, as_of)
     forecast = forecast_demand(df)
     profile = build_rhythm_profile(df)
 
@@ -73,12 +78,10 @@ def recommend_moves(df, as_of):
         equip_type = row["Type"]
         home_site = row["Site ID"]
 
-        # candidate destination sites: same Type, spiking, different site
         candidates = spiking[(spiking["Type"] == equip_type) & (spiking["Site ID"] != home_site)]
         if candidates.empty:
             continue
 
-        # pick the candidate with the highest forecasted demand for that type
         type_forecast = forecast[forecast["Type"] == equip_type]
         best = None
         for _, cand in candidates.iterrows():
@@ -94,7 +97,7 @@ def recommend_moves(df, as_of):
         forecast_month_start = pd.Period(best["forecast_month"]).start_time
         arrival_date = pd.Timestamp(as_of) + timedelta(days=TRANSIT_TIME_DAYS + BUFFER_DAYS)
 
-        if arrival_date <= forecast_month_start + pd.Timedelta(days=27):  # within the forecast month
+        if arrival_date <= forecast_month_start + pd.Timedelta(days=27):
             recommendations.append({
                 "Equipment ID": row["Equipment ID"],
                 "Type": equip_type,
@@ -112,9 +115,7 @@ def recommend_moves(df, as_of):
 if __name__ == "__main__":
     df = load_data("dataset/bookings.csv")
 
-    SIMULATED_TODAY = date(2026, 7, 30)  # adjust to match your demo date
-
-    tagged = eligibility_report(df, SIMULATED_TODAY)
+    tagged = eligibility_report(df)
 
     print("--- TOP PRIORITY (idle + overdue + unassigned) ---")
     tp = tagged[tagged["top_priority"]][["Equipment ID", "Type", "Site ID", "idle_ratio"]]
@@ -125,5 +126,5 @@ if __name__ == "__main__":
     print(uc.to_string(index=False) if not uc.empty else "None")
 
     print("\n--- MOVE RECOMMENDATIONS ---")
-    moves = recommend_moves(df, SIMULATED_TODAY)
+    moves = recommend_moves(df)
     print(moves.to_string(index=False) if not moves.empty else "None")

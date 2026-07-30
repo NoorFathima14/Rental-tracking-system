@@ -1,7 +1,7 @@
 """
 forecast.py
 Demand Forecasting — trend + seasonal-adjusted forecast with confidence rating.
-Depends on rhythm_engine.py (must be in the same folder).
+Depends on rhythm_engine.py.
 """
 
 import numpy as np
@@ -11,10 +11,10 @@ from rhythm_engine import load_data, build_rhythm_profile, business_days_in_mont
 
 def forecast_demand(df, group_cols=["Site ID", "Type"]):
     """
-    For each Site+Type, forecasts next month's demand using:
-      - trend (linear slope on weekday_adjusted_rate over time)
-      - seasonal_index for the forecasted calendar month
-      - confidence: High/Medium/Low based on how consistent the trend is
+    For each Site+Type: fits a trend line over weekday-adjusted rental rate,
+    projects it one month forward, applies that month's seasonal factor,
+    and rates confidence (High/Medium/Low) based on how consistent the
+    historical trend has been (lower residual noise = higher confidence).
     """
     profile = build_rhythm_profile(df, group_cols)
     results = []
@@ -40,18 +40,13 @@ def forecast_demand(df, group_cols=["Site ID", "Type"]):
             else:
                 confidence = "Low"
 
-        # forecast next month's weekday-adjusted rate via trend
         predicted_rate = max(0.0, intercept + slope * n)
 
         next_month = group["month"].max() + 1
         next_month_num = next_month.month
         next_business_days = business_days_in_month(next_month)
 
-        # seasonal factor: look up this Site+Type's seasonal_index for that
-        # calendar month if we've seen it before, else assume neutral (1.0)
-        seasonal_lookup = {
-            m.month: s for m, s in zip(group["month"], group["seasonal_index"])
-        }
+        seasonal_lookup = {m.month: s for m, s in zip(group["month"], group["seasonal_index"])}
         seasonal_factor = seasonal_lookup.get(next_month_num, 1.0)
 
         forecast_count = predicted_rate * next_business_days * seasonal_factor

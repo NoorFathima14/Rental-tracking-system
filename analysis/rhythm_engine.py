@@ -28,7 +28,7 @@ def business_days_in_month(period):
     return np.busday_count(start.date(), (end + pd.Timedelta(days=1)).date())
 
 
-def build_rhythm_profile(df, group_cols=["Site ID", "Type"]):
+def build_rhythm_profile(df, group_cols=["Site ID", "Type"], min_months_for_seasonality=3):
     """
     Returns one row per (Site ID, Type, month) with:
       - rental_count
@@ -36,10 +36,16 @@ def build_rhythm_profile(df, group_cols=["Site ID", "Type"]):
       - seasonal_index[month] = avg rentals that month / avg rentals overall
       - spike_detected = rental_count > baseline_average * 1.3
 
-    NOTE: rows with NULL Site ID are dropped (untracked equipment can't be
-    attributed to a site's demand pattern — anomaly module owns those rows).
+    NOTE: rows with NULL Site ID are dropped — untracked equipment can't be
+    attributed to a site's demand pattern.
+
+    CHANGE: seasonal_index now falls back to neutral (1.0) for any
+    Site+Type that has fewer than `min_months_for_seasonality` distinct
+    months of history — otherwise a single early/late month gets treated
+    as a "seasonal pattern" when it's really just noise from a small sample.
     """
     df = df.copy()
+    df = df.dropna(subset=["Site ID"])
     df["month"] = df["Check-In Date"].dt.to_period("M")
 
     counts = (
@@ -59,14 +65,21 @@ def build_rhythm_profile(df, group_cols=["Site ID", "Type"]):
     overall_avg = month_counts.groupby(group_cols)["month_count"].mean().reset_index().rename(
         columns={"month_count": "overall_avg"}
     )
-    seasonal = monthly_avg.merge(overall_avg, on=group_cols)
-    seasonal["seasonal_index"] = seasonal["month_count"] / seasonal["overall_avg"]
+    n_months = df.groupby(group_cols)["month"].nunique().reset_index(name="n_months")
+
+    seasonal = monthly_avg.merge(overall_avg, on=group_cols).merge(n_months, on=group_cols)
+    seasonal["seasonal_index"] = np.where(
+        seasonal["n_months"] >= min_months_for_seasonality,
+        seasonal["month_count"] / seasonal["overall_avg"],
+        1.0,
+    )
 
     counts["month_num"] = counts["month"].dt.month
     counts = counts.merge(
         seasonal[group_cols + ["month_num", "seasonal_index"]],
         on=group_cols + ["month_num"], how="left"
     )
+    counts["seasonal_index"] = counts["seasonal_index"].fillna(1.0)
 
     baseline = counts.groupby(group_cols)["rental_count"].transform("mean")
     counts["baseline_average"] = baseline
