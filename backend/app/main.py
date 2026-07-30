@@ -5,10 +5,10 @@ from sqlalchemy import inspect
 import pandas as pd
 from pathlib import Path
 
-from app.config import settings
-from app.models import HealthResponse
-from app.database import engine, get_db, Base
-from app.db_models import Booking
+from .config import settings
+from .models import HealthResponse
+from .database import engine, get_db, Base
+from .db_models import Booking
 
 app = FastAPI(title="Smart Rental Tracking API", version="1.0.0")
 
@@ -32,7 +32,7 @@ def startup():
 def _load_csv_if_empty():
     """Loads bookings.csv into SQLite only if the table is currently empty,
     so re-running the container doesn't duplicate rows every restart."""
-    from app.database import SessionLocal
+    from .database import SessionLocal
 
     db = SessionLocal()
     try:

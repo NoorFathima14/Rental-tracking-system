@@ -4,7 +4,7 @@ SQLAlchemy ORM model — the actual DB table. Kept separate from
 so "DB shape" and "API shape" can evolve independently.
 """
 from sqlalchemy import Column, Integer, String, Float, Date
-from app.database import Base
+from .database import Base
 
 
 class Booking(Base):
