@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import CheckInOut from "./CheckInOut";
+import UsageLogs from "./UsageLogs";
 
 export default function App() {
   const [health, setHealth] = useState(null);
@@ -108,6 +109,7 @@ export default function App() {
         </section>
       )}
       <CheckInOut onActionComplete={fetchPulse} />
+      <UsageLogs />
     </div>
   );
 }

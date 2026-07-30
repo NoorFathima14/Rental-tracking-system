@@ -260,3 +260,99 @@ button:disabled {
   border-radius: 6px;
   font-size: 0.85rem;
 }
+
+.usage-panel {
+  margin-top: 24px;
+}
+
+.usage-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 12px;
+}
+
+.usage-tab {
+  padding: 8px 16px;
+  border: 1px solid #d8dade;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.usage-tab-active {
+  background: #1a1d23;
+  color: white;
+  border-color: #1a1d23;
+}
+
+.usage-filters {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: end;
+  margin-bottom: 20px;
+}
+
+.usage-filters label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+  color: #444;
+  gap: 4px;
+}
+
+.usage-filters select,
+.usage-filters input {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #d8dade;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.clear-filters-btn {
+  padding: 7px 14px;
+  border: 1px solid #d8dade;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #666;
+  height: fit-content;
+}
+
+.usage-loading,
+.usage-empty {
+  color: #666;
+  font-size: 0.85rem;
+  padding: 20px 0;
+}
+
+.usage-table-wrapper {
+  overflow-x: auto;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.usage-table th,
+.usage-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  white-space: nowrap;
+}
+
+.usage-table th {
+  color: #666;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}

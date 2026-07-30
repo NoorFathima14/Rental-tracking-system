@@ -154,3 +154,41 @@ async def api_check_out(req: CheckOutRequest, db: Session = Depends(get_db)):
     if not result["success"]:
         raise HTTPException(status_code=404, detail=result["message"])
     return result
+
+from .usage_logging import (
+    bookings_to_dataframe as usage_bookings_to_dataframe,
+    compute_booking_usage,
+    filter_bookings,
+    breakdown_by_equipment,
+    breakdown_by_site,
+    breakdown_by_operator,
+    breakdown_by_time_period,
+)
+
+
+@app.get("/api/usage")
+async def usage(
+    view: str = "equipment",       # equipment | site | operator | time
+    granularity: str = "month",    # week | month (only used when view=time)
+    site_id: str | None = None,
+    equipment_type: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    df = usage_bookings_to_dataframe(db)
+    df = compute_booking_usage(df)
+    df = filter_bookings(df, site_id=site_id, equipment_type=equipment_type, start_date=start_date, end_date=end_date)
+
+    if view == "equipment":
+        rows = breakdown_by_equipment(df, db)
+    elif view == "site":
+        rows = breakdown_by_site(df)
+    elif view == "operator":
+        rows = breakdown_by_operator(df)
+    elif view == "time":
+        rows = breakdown_by_time_period(df, granularity=granularity)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown view: {view}")
+
+    return {"view": view, "granularity": granularity if view == "time" else None, "rows": rows}
