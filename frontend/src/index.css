@@ -14,9 +14,10 @@ body {
 }
 
 .page {
-  max-width: 720px;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 48px 24px;
+  padding: 32px 40px;
+  box-sizing: border-box;
 }
 
 .header {
@@ -119,7 +120,7 @@ button:disabled {
 
 .pulse-strip {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   margin-bottom: 24px;
   flex-wrap: wrap;
 }
@@ -127,9 +128,9 @@ button:disabled {
 .pulse-card {
   background: white;
   border-radius: 12px;
-  padding: 16px 20px;
+  padding: 20px 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  min-width: 120px;
+  min-width: 160px;
   flex: 1;
 }
 
@@ -332,27 +333,50 @@ button:disabled {
   padding: 20px 0;
 }
 
-.usage-table-wrapper {
-  overflow-x: auto;
+.usage-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
 }
 
-.usage-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
+.usage-card {
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 16px;
 }
 
-.usage-table th,
-.usage-table td {
-  text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid #eee;
-  white-space: nowrap;
+.usage-card-title {
+  font-weight: 700;
+  font-size: 1rem;
 }
 
-.usage-table th {
-  color: #666;
-  font-weight: 600;
+.usage-card-subtitle {
   font-size: 0.75rem;
+  color: #888;
+  margin-top: 2px;
+  margin-bottom: 10px;
+}
+
+.usage-card-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.usage-card-metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.usage-card-metric-value {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.usage-card-metric-label {
+  font-size: 0.7rem;
+  color: #888;
   text-transform: uppercase;
 }

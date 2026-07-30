@@ -119,74 +119,81 @@ export default function UsageLogs() {
       {loading && <div className="usage-loading">Loading...</div>}
       {error && <div className="error">{error}</div>}
 
-      {!loading && !error && <UsageTable view={activeView} rows={rows} />}
+      {!loading && !error && <UsageCards view={activeView} rows={rows} />}
     </section>
   );
 }
 
-function UsageTable({ view, rows }) {
+function UsageCards({ view, rows }) {
   if (rows.length === 0) {
     return <div className="usage-empty">No data matches the current filters.</div>;
   }
 
-  const columnsByView = {
-    equipment: [
-      ["equipment_id", "Equipment"],
-      ["type", "Type"],
-      ["current_status", "Status"],
-      ["bookings", "Bookings"],
-      ["total_runtime_hours", "Runtime (hrs)"],
-      ["total_idle_hours", "Idle (hrs)"],
-      ["total_fuel_litres", "Fuel (L)"],
-      ["late_returns", "Late Returns"],
-    ],
-    site: [
-      ["site_id", "Site"],
-      ["bookings", "Bookings"],
-      ["distinct_equipment", "Distinct Equipment"],
-      ["total_runtime_hours", "Runtime (hrs)"],
-      ["total_idle_hours", "Idle (hrs)"],
-      ["total_fuel_litres", "Fuel (L)"],
-    ],
-    operator: [
-      ["operator_id", "Operator"],
-      ["bookings", "Bookings"],
-      ["total_runtime_hours", "Runtime (hrs)"],
-      ["total_idle_hours", "Idle (hrs)"],
-      ["late_returns", "Late Returns"],
-      ["late_return_rate_pct", "Late Rate %"],
-    ],
-    time: [
-      ["period", "Period"],
-      ["bookings", "Bookings"],
-      ["total_runtime_hours", "Runtime (hrs)"],
-      ["total_idle_hours", "Idle (hrs)"],
-      ["total_fuel_litres", "Fuel (L)"],
-    ],
+  const cardConfig = {
+    equipment: (row) => ({
+      title: row.equipment_id,
+      subtitle: `${row.type} · ${row.current_status}`,
+      metrics: [
+        ["Bookings", row.bookings],
+        ["Runtime", `${row.total_runtime_hours} hrs`],
+        ["Idle", `${row.total_idle_hours} hrs`],
+        ["Fuel", `${row.total_fuel_litres} L`],
+        ["Late Returns", row.late_returns],
+      ],
+    }),
+    site: (row) => ({
+      title: row.site_id,
+      subtitle: `${row.distinct_equipment} equipment used`,
+      metrics: [
+        ["Bookings", row.bookings],
+        ["Runtime", `${row.total_runtime_hours} hrs`],
+        ["Idle", `${row.total_idle_hours} hrs`],
+        ["Fuel", `${row.total_fuel_litres} L`],
+      ],
+    }),
+    operator: (row) => ({
+      title: row.operator_id,
+      subtitle: `${row.late_return_rate_pct}% late-return rate`,
+      metrics: [
+        ["Bookings", row.bookings],
+        ["Runtime", `${row.total_runtime_hours} hrs`],
+        ["Idle", `${row.total_idle_hours} hrs`],
+        ["Late Returns", row.late_returns],
+      ],
+    }),
+    time: (row) => ({
+      title: row.period,
+      subtitle: null,
+      metrics: [
+        ["Bookings", row.bookings],
+        ["Runtime", `${row.total_runtime_hours} hrs`],
+        ["Idle", `${row.total_idle_hours} hrs`],
+        ["Fuel", `${row.total_fuel_litres} L`],
+      ],
+    }),
   };
 
-  const columns = columnsByView[view];
+  const buildCard = cardConfig[view];
 
   return (
-    <div className="usage-table-wrapper">
-      <table className="usage-table">
-        <thead>
-          <tr>
-            {columns.map(([key, label]) => (
-              <th key={key}>{label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}>
-              {columns.map(([key]) => (
-                <td key={key}>{row[key] ?? "—"}</td>
+    <div className="usage-card-grid">
+      {rows.map((row, i) => {
+        const card = buildCard(row);
+        return (
+          <div key={i} className="usage-card">
+            <div className="usage-card-title">{card.title}</div>
+            {card.subtitle && <div className="usage-card-subtitle">{card.subtitle}</div>}
+            <div className="usage-card-metrics">
+              {card.metrics.map(([label, value]) => (
+                <div key={label} className="usage-card-metric">
+                  <span className="usage-card-metric-value">{value}</span>
+                  <span className="usage-card-metric-label">{label}</span>
+                </div>
               ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
