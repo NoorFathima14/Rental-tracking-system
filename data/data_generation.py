@@ -1,0 +1,351 @@
+"""
+Synthetic Data Generator — Smart Rental Tracking System
+=========================================================
+Generates a fleet of equipment, a year of rental bookings, and daily usage
+logs (engine hrs, idle hrs, fuel, location), with:
+  - overall seasonal demand trend (low in winter, peak around July)
+  - per-site behavioural profiles (e.g. waterlogging site -> high idle in monsoon)
+  - realistic per-type engine/idle/fuel patterns (Crane can legitimately be 0 engine hrs)
+  - injectable anomalies via a standalone function you can call as many times as you want
+
+Every function is independent so you can re-run just the piece you need
+(e.g. call `inject_anomalies()` again later to add more bad rows).
+
+Output columns match your base sample table, plus a `usage_logs` table for
+daily-level fuel/location/idle detail (needed for the Usage Logging module).
+"""
+
+import numpy as np
+import pandas as pd
+from datetime import date, timedelta
+
+RNG = np.random.default_rng(42)  # fixed seed -> reproducible demo data
+
+# ---------------------------------------------------------------------------
+# 1. REFERENCE DATA
+# ---------------------------------------------------------------------------
+
+EQUIPMENT_TYPES = ["Excavator", "Crane", "Bulldozer", "Grader"]
+
+# 5 sites, each with a distinct behavioural profile.
+# `profile` is used later by site_idle_modifier() / site_demand_modifier().
+SITES = {
+    "S001": {"name": "Site S001 - Coastal Lowland",     "profile": "waterlogging"},
+    "S002": {"name": "Site S002 - Urban Core",           "profile": "steady"},
+    "S003": {"name": "Site S003 - Highland Quarry",      "profile": "pre_monsoon_peak"},
+    "S004": {"name": "Site S004 - Rural Highway",        "profile": "winter_slowdown"},
+    "S005": {"name": "Site S005 - New Development Zone", "profile": "ramping_up"},
+}
+SITE_IDS = list(SITES.keys())
+
+# Small, fixed operator pool (per your note: keep it small to see patterns repeat)
+OPERATORS = [f"OP10{i}" for i in range(1, 9)]  # OP101 ... OP108
+
+# Fixed fleet: 4 units per equipment type = 16 machines total
+FLEET_SIZE_PER_TYPE = 4
+
+
+def build_fleet():
+    """Create the fixed equipment fleet (equipment_id <-> type mapping)."""
+    fleet = []
+    eq_counter = 1001
+    for eq_type in EQUIPMENT_TYPES:
+        for _ in range(FLEET_SIZE_PER_TYPE):
+            fleet.append({"equipment_id": f"EQX{eq_counter}", "type": eq_type})
+            eq_counter += 1
+    return pd.DataFrame(fleet)
+
+
+# ---------------------------------------------------------------------------
+# 2. SEASONAL / SITE PATTERN FUNCTIONS
+#    (kept separate so you can tune each independently)
+# ---------------------------------------------------------------------------
+
+def overall_seasonal_demand_weight(month: int) -> float:
+    """
+    Overall fleet-wide demand weight by month (1-12).
+    Low in winter (Dec-Feb), ramps up, peaks around July, tapers after.
+    Returned value scales the probability a booking starts in that month.
+    """
+    weights = {
+        1: 0.5, 2: 0.5, 3: 0.7, 4: 0.9, 5: 1.0,
+        6: 1.1, 7: 1.3, 8: 1.2, 9: 1.0, 10: 0.9,
+        11: 0.7, 12: 0.5,
+    }
+    return weights[month]
+
+
+def site_idle_modifier(site_id: str, current_date: date) -> float:
+    """
+    Multiplier applied to a day's idle hours based on site profile + date.
+    >1 means "more idle than normal" (e.g. waterlogging shuts work down).
+    """
+    profile = SITES[site_id]["profile"]
+    month = current_date.month
+
+    if profile == "waterlogging":
+        # Monsoon months: Jun-Sep -> heavy idle spike
+        return 2.5 if month in (6, 7, 8, 9) else 1.0
+
+    if profile == "winter_slowdown":
+        # Workforce/holiday slowdown Dec-Feb -> more idle
+        return 1.8 if month in (12, 1, 2) else 1.0
+
+    if profile == "pre_monsoon_peak":
+        # Very active Mar-May (low idle), quieter/more idle Jun-Sep (monsoon access issues)
+        if month in (3, 4, 5):
+            return 0.6
+        if month in (6, 7, 8, 9):
+            return 1.6
+        return 1.0
+
+    if profile == "ramping_up":
+        # New site: starts underused (high idle), idle shrinks as year progresses
+        return max(1.6 - (month - 1) * 0.1, 0.7)
+
+    return 1.0  # "steady" profile - no seasonal effect
+
+
+def site_demand_modifier(site_id: str) -> float:
+    """Relative booking-frequency weight per site (independent of season)."""
+    profile = SITES[site_id]["profile"]
+    return {
+        "waterlogging": 0.9,
+        "steady": 1.3,          # urban core -> consistently busiest site
+        "pre_monsoon_peak": 1.0,
+        "winter_slowdown": 0.8,
+        "ramping_up": 0.7,      # new site -> fewer bookings overall
+    }[profile]
+
+
+# Baseline expected engine-hours/day and idle-hours/day per equipment type,
+# before site/season modifiers are applied.
+TYPE_BASELINES = {
+    # engine_hours_mean, idle_hours_mean, fuel_active_lph, fuel_idle_lph
+    "Excavator": {"engine_mean": 6.5, "idle_mean": 3.0, "fuel_active": 18, "fuel_idle": 4},
+    "Crane":     {"engine_mean": 3.0, "idle_mean": 6.0, "fuel_active": 12, "fuel_idle": 2},
+    "Bulldozer": {"engine_mean": 7.0, "idle_mean": 2.5, "fuel_active": 22, "fuel_idle": 5},
+    "Grader":    {"engine_mean": 5.5, "idle_mean": 3.5, "fuel_active": 15, "fuel_idle": 3},
+}
+
+
+# ---------------------------------------------------------------------------
+# 3. BOOKING GENERATION (the summary table matching your base sample)
+# ---------------------------------------------------------------------------
+
+def generate_bookings(fleet_df: pd.DataFrame, year: int = 2025, num_bookings: int = 60) -> pd.DataFrame:
+    """
+    Generates rental bookings (one row per rental, like your base table),
+    respecting overall seasonal demand + per-site demand weighting.
+    Each booking gets a check-in (out-date) and a rental-day length, deriving the check-out (return) date.
+    Engine hrs/day and idle hrs/day are AVERAGES for that booking (daily detail
+    lives in generate_usage_logs()).
+    """
+    months = np.arange(1, 13)
+    month_weights = np.array([overall_seasonal_demand_weight(m) for m in months])
+    month_probs = month_weights / month_weights.sum()
+
+    site_weights = np.array([site_demand_modifier(s) for s in SITE_IDS])
+    site_probs = site_weights / site_weights.sum()
+
+    rows = []
+    for i in range(num_bookings):
+        eq_row = fleet_df.sample(1, random_state=RNG.integers(0, 1_000_000)).iloc[0]
+        equipment_id, eq_type = eq_row["equipment_id"], eq_row["type"]
+
+        month = RNG.choice(months, p=month_probs)
+        day = RNG.integers(1, 28)
+        # NOTE: matches your base table's convention -> "Check-In Date" is the
+        # EARLIER date (equipment goes out to site), "Check-Out Date" is the
+        # LATER / return date. Rental Days = Check-Out Date - Check-In Date.
+        checkin_date = date(year, month, day)
+
+        site_id = RNG.choice(SITE_IDS, p=site_probs)
+
+        rental_days = int(RNG.integers(7, 31))  # 1 week to 1 month
+        checkout_date = checkin_date + timedelta(days=rental_days)
+
+        operator_id = RNG.choice(OPERATORS)
+
+        baseline = TYPE_BASELINES[eq_type]
+        idle_mult = site_idle_modifier(site_id, checkin_date)
+
+        engine_hours_day = max(0, RNG.normal(baseline["engine_mean"], 1.2))
+        idle_hours_day = max(0, RNG.normal(baseline["idle_mean"] * idle_mult, 1.0))
+
+        # Crane parked & stationary can legitimately show 0 engine hours;
+        # for other types, floor engine hours slightly above 0 (true 0 = anomaly, injected separately)
+        if eq_type == "Crane" and RNG.random() < 0.25:
+            engine_hours_day = 0.0
+
+        rows.append({
+            "Equipment ID": equipment_id,
+            "Type": eq_type,
+            "Site ID": site_id,
+            "Check-In Date": checkin_date,       # equipment goes out to site (earlier date)
+            "Check-Out Date": checkout_date,     # equipment returned (later date)
+            "Engine Hours/Day": round(engine_hours_day, 1),
+            "Idle Hours/Day": round(idle_hours_day, 1),
+            "Rental Days": rental_days,
+            "Last Operator ID": operator_id,
+        })
+
+    df = pd.DataFrame(rows)
+    df["booking_id"] = [f"BKG{1000+i}" for i in range(len(df))]
+    return df
+
+
+def recompute_rental_days(df: pd.DataFrame) -> pd.DataFrame:
+    """Utility: rental days must always be derived from checkin/checkout dates.
+    Check-Out Date (return) is later than Check-In Date (equipment goes out)."""
+    df = df.copy()
+    df["Rental Days"] = (
+        pd.to_datetime(df["Check-Out Date"]) - pd.to_datetime(df["Check-In Date"])
+    ).dt.days
+    return df
+
+
+# ---------------------------------------------------------------------------
+# 4. ANOMALY INJECTION — call this as many times as you like to add more
+# ---------------------------------------------------------------------------
+
+def inject_anomalies(df: pd.DataFrame, num_anomalies: int = 5, anomaly_types: list = None) -> pd.DataFrame:
+    """
+    Injects anomalies into a COPY of the bookings dataframe and returns it.
+    Call this multiple times (on the growing df) to keep adding more anomalies.
+
+    anomaly_types: subset of
+        ["missing_site", "missing_operator", "zero_engine_nonCrane",
+         "excessive_idle", "negative_or_zero_rental_days"]
+        If None, picks randomly from all types each call.
+    """
+    df = df.copy()
+    all_types = [
+        "missing_site", "missing_operator", "zero_engine_nonCrane",
+        "excessive_idle", "negative_or_zero_rental_days",
+    ]
+    types_pool = anomaly_types if anomaly_types else all_types
+
+    idx_choices = RNG.choice(df.index, size=min(num_anomalies, len(df)), replace=False)
+
+    for idx in idx_choices:
+        anomaly = RNG.choice(types_pool)
+
+        if anomaly == "missing_site":
+            df.loc[idx, "Site ID"] = None
+
+        elif anomaly == "missing_operator":
+            df.loc[idx, "Last Operator ID"] = None
+
+        elif anomaly == "zero_engine_nonCrane":
+            if df.loc[idx, "Type"] != "Crane":
+                df.loc[idx, "Engine Hours/Day"] = 0.0
+
+        elif anomaly == "excessive_idle":
+            # near-full-day idle -> clearly abnormal, machine essentially parked but billed
+            df.loc[idx, "Idle Hours/Day"] = round(float(RNG.uniform(20, 23)), 1)
+            df.loc[idx, "Engine Hours/Day"] = round(float(RNG.uniform(0, 1)), 1)
+
+        elif anomaly == "negative_or_zero_rental_days":
+            # simulate a data-entry glitch: checkout (return) same as checkin (out-date)
+            df.loc[idx, "Check-Out Date"] = df.loc[idx, "Check-In Date"]
+
+    df = recompute_rental_days(df)
+    return df
+
+
+# ---------------------------------------------------------------------------
+# 5. DAILY USAGE LOGS (fuel + location + day-by-day idle/engine split)
+#    Expands each booking into one row per rental day.
+# ---------------------------------------------------------------------------
+
+# Small fixed base coordinates per site (fictional), used with jitter to
+# simulate GPS pings without needing a real map/GPS feed.
+SITE_COORDS = {
+    "S001": (13.0500, 80.2500),
+    "S002": (13.0827, 80.2707),
+    "S003": (13.1200, 80.2200),
+    "S004": (12.9900, 80.1800),
+    "S005": (13.0300, 80.3100),
+}
+
+
+def generate_usage_logs(bookings_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expands each booking row into a daily usage log:
+    engine_hours, idle_hours, fuel_consumed_litres, lat, lon.
+    Applies site_idle_modifier() per actual calendar day (not just booking average),
+    so within one long rental you can see e.g. a monsoon idle spike mid-booking.
+    """
+    logs = []
+    for _, b in bookings_df.iterrows():
+        if pd.isnull(b["Check-Out Date"]) or pd.isnull(b["Rental Days"]) or b["Rental Days"] <= 0:
+            continue  # skip corrupted/anomalous bookings with no valid date range
+
+        eq_type = b["Type"]
+        site_id = b["Site ID"]
+        baseline = TYPE_BASELINES.get(eq_type, TYPE_BASELINES["Excavator"])
+        base_lat, base_lon = SITE_COORDS.get(site_id, (13.05, 80.25))
+
+        start_date = pd.to_datetime(b["Check-In Date"]).date()  # equipment goes out to site
+
+        for d in range(int(b["Rental Days"])):
+            current_day = start_date + timedelta(days=d)
+
+            idle_mult = site_idle_modifier(site_id, current_day) if pd.notnull(site_id) else 1.2
+            engine_hours = max(0, RNG.normal(baseline["engine_mean"], 1.0))
+            idle_hours = max(0, RNG.normal(baseline["idle_mean"] * idle_mult, 0.8))
+
+            if eq_type == "Crane" and RNG.random() < 0.25:
+                engine_hours = 0.0
+
+            fuel = round(
+                engine_hours * baseline["fuel_active"] + idle_hours * baseline["fuel_idle"], 1
+            )
+
+            logs.append({
+                "booking_id": b["booking_id"],
+                "equipment_id": b["Equipment ID"],
+                "date": current_day,
+                "engine_hours": round(engine_hours, 1),
+                "idle_hours": round(idle_hours, 1),
+                "fuel_consumed_litres": fuel,
+                "lat": round(base_lat + RNG.uniform(-0.002, 0.002), 5),
+                "lon": round(base_lon + RNG.uniform(-0.002, 0.002), 5),
+            })
+
+    return pd.DataFrame(logs)
+
+
+# ---------------------------------------------------------------------------
+# 6. MAIN — wire it all together
+# ---------------------------------------------------------------------------
+
+def main():
+    fleet_df = build_fleet()
+    bookings_df = generate_bookings(fleet_df, year=2025, num_bookings=60)
+
+    # Seed some anomalies right away (call again later for more)
+    bookings_df = inject_anomalies(bookings_df, num_anomalies=6)
+
+    usage_logs_df = generate_usage_logs(bookings_df)
+
+    sites_df = pd.DataFrame([
+        {"site_id": sid, "site_name": info["name"], "profile": info["profile"]}
+        for sid, info in SITES.items()
+    ])
+
+    fleet_df.to_csv("fleet.csv", index=False)
+    sites_df.to_csv("sites.csv", index=False)
+    bookings_df.to_csv("bookings.csv", index=False)
+    usage_logs_df.to_csv("usage_logs.csv", index=False)
+
+    print(f"Fleet: {len(fleet_df)} units")
+    print(f"Bookings: {len(bookings_df)} rows (with anomalies injected)")
+    print(f"Usage logs: {len(usage_logs_df)} daily rows")
+    print("\nSample bookings:\n", bookings_df.head(10).to_string(index=False))
+    print("\nSample usage logs:\n", usage_logs_df.head(5).to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()
