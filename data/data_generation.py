@@ -133,16 +133,23 @@ TYPE_BASELINES = {
 # 3. BOOKING GENERATION (the summary table matching your base sample)
 # ---------------------------------------------------------------------------
 
-def generate_bookings(fleet_df: pd.DataFrame, year: int = 2025, num_bookings: int = 60) -> pd.DataFrame:
+def generate_bookings(fleet_df: pd.DataFrame, start_date: date, end_date: date, num_bookings: int = 1400) -> pd.DataFrame:
     """
-    Generates rental bookings (one row per rental, like your base table),
-    respecting overall seasonal demand + per-site demand weighting.
-    Each booking gets a check-in (out-date) and a rental-day length, deriving the check-out (return) date.
-    Engine hrs/day and idle hrs/day are AVERAGES for that booking (daily detail
-    lives in generate_usage_logs()).
+    Generates rental bookings across an arbitrary date range (can span multiple years).
+    Each (year, month) combo in the range is weighted by overall_seasonal_demand_weight()
+    using its calendar month, so seasonality repeats correctly across both 2025 and 2026.
     """
-    months = np.arange(1, 13)
-    month_weights = np.array([overall_seasonal_demand_weight(m) for m in months])
+    # Build list of every (year, month) pair in the range
+    year_months = []
+    y, m = start_date.year, start_date.month
+    while (y, m) <= (end_date.year, end_date.month):
+        year_months.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    month_weights = np.array([overall_seasonal_demand_weight(m) for (_, m) in year_months])
     month_probs = month_weights / month_weights.sum()
 
     site_weights = np.array([site_demand_modifier(s) for s in SITE_IDS])
@@ -153,16 +160,14 @@ def generate_bookings(fleet_df: pd.DataFrame, year: int = 2025, num_bookings: in
         eq_row = fleet_df.sample(1, random_state=RNG.integers(0, 1_000_000)).iloc[0]
         equipment_id, eq_type = eq_row["equipment_id"], eq_row["type"]
 
-        month = RNG.choice(months, p=month_probs)
+        ym_idx = RNG.choice(len(year_months), p=month_probs)
+        year, month = year_months[ym_idx]
         day = RNG.integers(1, 28)
-        # NOTE: matches your base table's convention -> "Check-In Date" is the
-        # EARLIER date (equipment goes out to site), "Check-Out Date" is the
-        # LATER / return date. Rental Days = Check-Out Date - Check-In Date.
         checkin_date = date(year, month, day)
 
         site_id = RNG.choice(SITE_IDS, p=site_probs)
 
-        rental_days = int(RNG.integers(7, 31))  # 1 week to 1 month
+        rental_days = int(RNG.integers(7, 31))
         checkout_date = checkin_date + timedelta(days=rental_days)
 
         operator_id = RNG.choice(OPERATORS)
@@ -173,8 +178,6 @@ def generate_bookings(fleet_df: pd.DataFrame, year: int = 2025, num_bookings: in
         engine_hours_day = max(0, RNG.normal(baseline["engine_mean"], 1.2))
         idle_hours_day = max(0, RNG.normal(baseline["idle_mean"] * idle_mult, 1.0))
 
-        # Crane parked & stationary can legitimately show 0 engine hours;
-        # for other types, floor engine hours slightly above 0 (true 0 = anomaly, injected separately)
         if eq_type == "Crane" and RNG.random() < 0.25:
             engine_hours_day = 0.0
 
@@ -182,8 +185,8 @@ def generate_bookings(fleet_df: pd.DataFrame, year: int = 2025, num_bookings: in
             "Equipment ID": equipment_id,
             "Type": eq_type,
             "Site ID": site_id,
-            "Check-In Date": checkin_date,       # equipment goes out to site (earlier date)
-            "Check-Out Date": checkout_date,     # equipment returned (later date)
+            "Check-In Date": checkin_date,
+            "Check-Out Date": checkout_date,
             "Engine Hours/Day": round(engine_hours_day, 1),
             "Idle Hours/Day": round(idle_hours_day, 1),
             "Rental Days": rental_days,
@@ -193,7 +196,6 @@ def generate_bookings(fleet_df: pd.DataFrame, year: int = 2025, num_bookings: in
     df = pd.DataFrame(rows)
     df["booking_id"] = [f"BKG{1000+i}" for i in range(len(df))]
     return df
-
 
 def recompute_rental_days(df: pd.DataFrame) -> pd.DataFrame:
     """Utility: rental days must always be derived from checkin/checkout dates.
@@ -322,30 +324,22 @@ def generate_usage_logs(bookings_df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def main():
+    from datetime import date
+
     fleet_df = build_fleet()
-    bookings_df = generate_bookings(fleet_df, year=2025, num_bookings=60)
 
-    # Seed some anomalies right away (call again later for more)
-    bookings_df = inject_anomalies(bookings_df, num_anomalies=6)
+    bookings_df = generate_bookings(
+        fleet_df,
+        start_date=date(2025, 1, 1),
+        end_date=date(2026, 7, 30),
+        num_bookings=1400
+    )
 
-    usage_logs_df = generate_usage_logs(bookings_df)
+    bookings_df = inject_anomalies(bookings_df, num_anomalies=70)  # scale anomaly count with row count too
 
-    sites_df = pd.DataFrame([
-        {"site_id": sid, "site_name": info["name"], "profile": info["profile"]}
-        for sid, info in SITES.items()
-    ])
-
-    fleet_df.to_csv("fleet.csv", index=False)
-    sites_df.to_csv("sites.csv", index=False)
-    bookings_df.to_csv("bookings.csv", index=False)
-    usage_logs_df.to_csv("usage_logs.csv", index=False)
-
-    print(f"Fleet: {len(fleet_df)} units")
-    print(f"Bookings: {len(bookings_df)} rows (with anomalies injected)")
-    print(f"Usage logs: {len(usage_logs_df)} daily rows")
-    print("\nSample bookings:\n", bookings_df.head(10).to_string(index=False))
-    print("\nSample usage logs:\n", usage_logs_df.head(5).to_string(index=False))
-
+    print(bookings_df.shape)
+    print(bookings_df.head())
+    bookings_df.to_csv("dataset/bookings.csv", index=False)
 
 if __name__ == "__main__":
     main()
