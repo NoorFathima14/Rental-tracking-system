@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import CheckInOut from "./CheckInOut";
 
 export default function App() {
   const [health, setHealth] = useState(null);
@@ -6,17 +7,20 @@ export default function App() {
   const [error, setError] = useState("");
   const [hoveredCard, setHoveredCard] = useState(null); // "overdue" | "idle" | null
 
-  useEffect(() => {
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then(setHealth)
-      .catch(() => setError("Could not reach backend."));
-
+  const fetchPulse = useCallback(() => {
     fetch("/api/dashboard/pulse")
       .then((r) => r.json())
       .then((data) => setPulse(data.pulse))
       .catch(() => setError("Could not load dashboard data."));
   }, []);
+
+  useEffect(() => {
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then(setHealth)
+      .catch(() => setError("Could not reach backend."));
+    fetchPulse();
+  }, [fetchPulse]);
 
   return (
     <div className="page">
@@ -33,6 +37,28 @@ export default function App() {
         <section className="pulse-strip">
           <PulseCard label="Total Equipment" value={pulse.total_equipment} />
           <PulseCard label="Currently Active" value={pulse.currently_active} />
+
+          <PulseCard
+            label="Available"
+            value={pulse.available}
+            onMouseEnter={() => setHoveredCard("available")}
+            onMouseLeave={() => setHoveredCard(null)}
+            tooltip={
+              hoveredCard === "available" && (
+                <Tooltip title="Available Equipment">
+                  {pulse.available_list.length === 0 ? (
+                    <div>None right now</div>
+                  ) : (
+                    pulse.available_list.map((eq) => (
+                      <div key={eq.equipment_id}>
+                        {eq.equipment_id} ({eq.type})
+                      </div>
+                    ))
+                  )}
+                </Tooltip>
+              )
+            }
+          />
 
           <PulseCard
             label="Idle Right Now"
@@ -81,6 +107,7 @@ export default function App() {
 
         </section>
       )}
+      <CheckInOut onActionComplete={fetchPulse} />
     </div>
   );
 }

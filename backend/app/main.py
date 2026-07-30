@@ -1,17 +1,18 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect
 import pandas as pd
 from pathlib import Path
+from datetime import date
+from pydantic import BaseModel
+import json
 
 from .config import settings
 from .models import HealthResponse
 from .database import engine, get_db, Base
 from .db_models import Booking
-
-import json
 from .dashboard_metrics import bookings_to_dataframe, compute_equipment_status, compute_fleet_pulse
+from .checkin_checkout import check_in, check_out, build_fleet_by_type
 
 app = FastAPI(title="Smart Rental Tracking API", version="1.0.0")
 
@@ -24,17 +25,16 @@ app.add_middleware(
 )
 
 CSV_PATH = Path("dataset/bookings.csv")
+FLEET_BY_TYPE = build_fleet_by_type()
 
 
 @app.on_event("startup")
 def startup():
-    Base.metadata.create_all(bind=engine)  # creates bookings.db table if it doesn't exist
+    Base.metadata.create_all(bind=engine)
     _load_csv_if_empty()
 
 
 def _load_csv_if_empty():
-    """Loads bookings.csv into SQLite only if the table is currently empty,
-    so re-running the container doesn't duplicate rows every restart."""
     from .database import SessionLocal
 
     db = SessionLocal()
@@ -103,9 +103,6 @@ async def dashboard_pulse(db: Session = Depends(get_db)):
     df = bookings_to_dataframe(db)
     status_df = compute_equipment_status(df)
     pulse = compute_fleet_pulse(status_df)
-
-    # pandas .to_json handles numpy int64/float64 + datetime.date cleanly,
-    # which FastAPI's default encoder does not always do automatically.
     equipment_status = json.loads(status_df.to_json(orient="records", date_format="iso"))
 
     return {
@@ -113,26 +110,20 @@ async def dashboard_pulse(db: Session = Depends(get_db)):
         "equipment_status": equipment_status,
     }
 
-from datetime import date
-from pydantic import BaseModel
-from .checkin_checkout import check_in, check_out, build_fleet_by_type
-
-FLEET_BY_TYPE = build_fleet_by_type()
-
 
 class CheckInRequest(BaseModel):
     equipment_type: str
     site_id: str
     check_in_date: date
+    rental_days: int
     operator_id: str
 
 
 class CheckOutRequest(BaseModel):
+    operator_id: str
     equipment_type: str
     site_id: str
     check_in_date: date
-    check_out_date: date
-    operator_id: str | None = None
 
 
 @app.post("/api/checkin")
@@ -142,6 +133,7 @@ async def api_check_in(req: CheckInRequest, db: Session = Depends(get_db)):
         equipment_type=req.equipment_type,
         site_id=req.site_id,
         check_in_date=req.check_in_date,
+        rental_days=req.rental_days,
         operator_id=req.operator_id,
         fleet_by_type=FLEET_BY_TYPE,
     )
@@ -154,11 +146,10 @@ async def api_check_in(req: CheckInRequest, db: Session = Depends(get_db)):
 async def api_check_out(req: CheckOutRequest, db: Session = Depends(get_db)):
     result = check_out(
         db,
+        operator_id=req.operator_id,
         equipment_type=req.equipment_type,
         site_id=req.site_id,
         check_in_date=req.check_in_date,
-        check_out_date=req.check_out_date,
-        operator_id=req.operator_id,
     )
     if not result["success"]:
         raise HTTPException(status_code=404, detail=result["message"])

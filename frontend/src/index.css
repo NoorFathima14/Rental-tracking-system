@@ -175,3 +175,88 @@ button:disabled {
 .pulse-tooltip-body div {
   padding: 2px 0;
 }
+
+.checkinout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+@media (max-width: 640px) {
+  .checkinout-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.panel h3 {
+  margin: 0 0 4px;
+}
+
+.panel-hint {
+  color: #666;
+  font-size: 0.85rem;
+  margin: 0 0 16px;
+}
+
+.panel label {
+  display: block;
+  font-size: 0.85rem;
+  color: #444;
+  margin-bottom: 12px;
+}
+
+.panel select,
+.panel input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #d8dade;
+  font-size: 0.9rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.rfid-button {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  background: #1a1d23;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.rfid-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.result-ok {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: #e3f6e8;
+  color: #1a7a3c;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.result-error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: #fbe9e7;
+  color: #b3261e;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
