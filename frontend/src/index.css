@@ -116,3 +116,62 @@ button:disabled {
   font-size: 0.95rem;
   line-height: 1.5;
 }
+
+.pulse-strip {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.pulse-card {
+  background: white;
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  min-width: 120px;
+  flex: 1;
+}
+
+.pulse-card-alert {
+  border-left: 4px solid #b3261e;
+}
+
+.pulse-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.pulse-label {
+  font-size: 0.8rem;
+  color: #666;
+  margin-top: 4px;
+}
+
+.pulse-tooltip {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 8px;
+  background: #1a1d23;
+  color: white;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  min-width: 220px;
+  max-width: 300px;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.pulse-tooltip strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #aaa;
+}
+
+.pulse-tooltip-body div {
+  padding: 2px 0;
+}

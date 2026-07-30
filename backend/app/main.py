@@ -10,6 +10,9 @@ from .models import HealthResponse
 from .database import engine, get_db, Base
 from .db_models import Booking
 
+import json
+from .dashboard_metrics import bookings_to_dataframe, compute_equipment_status, compute_fleet_pulse
+
 app = FastAPI(title="Smart Rental Tracking API", version="1.0.0")
 
 app.add_middleware(
@@ -94,3 +97,69 @@ async def get_equipment_bookings(equipment_id: str, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="Equipment ID not found")
     return [b.__dict__ for b in results]
 
+
+@app.get("/api/dashboard/pulse")
+async def dashboard_pulse(db: Session = Depends(get_db)):
+    df = bookings_to_dataframe(db)
+    status_df = compute_equipment_status(df)
+    pulse = compute_fleet_pulse(status_df)
+
+    # pandas .to_json handles numpy int64/float64 + datetime.date cleanly,
+    # which FastAPI's default encoder does not always do automatically.
+    equipment_status = json.loads(status_df.to_json(orient="records", date_format="iso"))
+
+    return {
+        "pulse": pulse,
+        "equipment_status": equipment_status,
+    }
+
+from datetime import date
+from pydantic import BaseModel
+from .checkin_checkout import check_in, check_out, build_fleet_by_type
+
+FLEET_BY_TYPE = build_fleet_by_type()
+
+
+class CheckInRequest(BaseModel):
+    equipment_type: str
+    site_id: str
+    check_in_date: date
+    operator_id: str
+
+
+class CheckOutRequest(BaseModel):
+    equipment_type: str
+    site_id: str
+    check_in_date: date
+    check_out_date: date
+    operator_id: str | None = None
+
+
+@app.post("/api/checkin")
+async def api_check_in(req: CheckInRequest, db: Session = Depends(get_db)):
+    result = check_in(
+        db,
+        equipment_type=req.equipment_type,
+        site_id=req.site_id,
+        check_in_date=req.check_in_date,
+        operator_id=req.operator_id,
+        fleet_by_type=FLEET_BY_TYPE,
+    )
+    if not result["success"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
+
+
+@app.post("/api/checkout")
+async def api_check_out(req: CheckOutRequest, db: Session = Depends(get_db)):
+    result = check_out(
+        db,
+        equipment_type=req.equipment_type,
+        site_id=req.site_id,
+        check_in_date=req.check_in_date,
+        check_out_date=req.check_out_date,
+        operator_id=req.operator_id,
+    )
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
